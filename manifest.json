@@ -1,0 +1,25 @@
+{
+  "name": "Spendly — Student money, made simple.",
+  "short_name": "Spendly",
+  "description": "A student-focused personal finance tracker. Transactions, budgets and savings goals, stored privately on your device.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0B0B0D",
+  "theme_color": "#0B0B0D",
+  "icons": [
+    {
+      "src": "assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
