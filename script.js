@@ -229,6 +229,212 @@ function spentByCategory(ref = new Date()) {
   return map;
 }
 
+/* =========================== 4b. EFFECTS (animation / interaction layer) =========================== */
+/**
+ * Small, dependency-free helpers for the "alive" feeling of the UI:
+ * animated numbers, animated progress fills, mouse-reactive 3D tilt on
+ * cards, a confetti burst, and a scrolled-state on the top bar. Every
+ * effect respects `prefers-reduced-motion` and fails silently if the
+ * browser or element isn't available, so it never blocks core function.
+ */
+const Effects = {
+  _numberFrames: new WeakMap(),
+
+  /** Animate a stat element's text from its previous value up/down to `target`. */
+  animateNumber(el, target, opts = {}) {
+    if (!el) return;
+    const isCount = !!opts.isCount;
+    const duration = opts.duration || 700;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const format = (n) => isCount ? Math.round(n).toLocaleString(CONFIG.locale) : formatMoney(n);
+
+    if (reduceMotion) {
+      el.textContent = format(target);
+      el.dataset.rawValue = target;
+      return;
+    }
+
+    const startRaw = parseFloat(el.dataset.rawValue);
+    const start = isNaN(startRaw) ? 0 : startRaw;
+    const startTime = performance.now();
+
+    if (this._numberFrames.has(el)) cancelAnimationFrame(this._numberFrames.get(el));
+
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      el.textContent = format(start + (target - start) * eased);
+      if (t < 1) {
+        this._numberFrames.set(el, requestAnimationFrame(step));
+      } else {
+        el.textContent = format(target);
+        el.dataset.rawValue = target;
+        el.classList.remove("updated");
+        void el.offsetWidth; // restart the pulse animation
+        el.classList.add("updated");
+      }
+    };
+    this._numberFrames.set(el, requestAnimationFrame(step));
+  },
+
+  /** Animate every `.progress-fill[data-pct]` inside `container` from 0 to its target width. */
+  animateFills(container = document) {
+    container.querySelectorAll(".progress-fill[data-pct]").forEach((fill) => {
+      const target = fill.dataset.pct;
+      fill.style.width = "0%";
+      void fill.offsetWidth; // force reflow so the browser registers 0% first
+      requestAnimationFrame(() => { fill.style.width = `${target}%`; });
+    });
+  },
+
+  /** Wire up a subtle mouse-reactive 3D tilt on every `.tiltable` element inside `container`. */
+  initTilt(container = document) {
+    if (window.matchMedia("(hover: none)").matches) return; // skip on touch devices
+    const MAX_DEG = 6;
+    container.querySelectorAll(".tiltable").forEach((card) => {
+      card.addEventListener("mousemove", (e) => {
+        const rect = card.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width;
+        const py = (e.clientY - rect.top) / rect.height;
+        card.style.setProperty("--rx", `${(px - 0.5) * MAX_DEG * 2}deg`);
+        card.style.setProperty("--ry", `${(0.5 - py) * MAX_DEG * 2}deg`);
+        card.style.setProperty("--mx", `${px * 100}%`);
+        card.style.setProperty("--my", `${py * 100}%`);
+      });
+      card.addEventListener("mouseleave", () => {
+        card.style.setProperty("--rx", "0deg");
+        card.style.setProperty("--ry", "0deg");
+      });
+    });
+  },
+
+  /** A short, lightweight confetti burst — used when a savings goal is fully funded. */
+  confetti(count = 130) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const canvas = document.createElement("canvas");
+    canvas.className = "confetti-canvas";
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+    const colors = ["#F5C518", "#4ADE80", "#60A5FA", "#F87171", "#C084FC", "#FB923C"];
+    const pieces = Array.from({ length: count }, () => ({
+      x: Math.random() * canvas.width,
+      y: -30 - Math.random() * canvas.height * 0.4,
+      w: 6 + Math.random() * 6,
+      h: 4 + Math.random() * 8,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      speedY: 2.5 + Math.random() * 3,
+      speedX: -1.5 + Math.random() * 3,
+      rot: Math.random() * 360,
+      rotSpeed: -8 + Math.random() * 16
+    }));
+    let frame = 0;
+    const maxFrames = 210;
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pieces.forEach((p) => {
+        p.x += p.speedX; p.y += p.speedY; p.rot += p.rotSpeed;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rot * Math.PI) / 180);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      });
+      frame++;
+      if (frame < maxFrames) requestAnimationFrame(draw); else canvas.remove();
+    };
+    requestAnimationFrame(draw);
+  },
+
+  /** Adds a soft shadow to the top bar once the page has scrolled. */
+  initTopbarScroll() {
+    const topbar = document.querySelector(".topbar");
+    if (!topbar) return;
+    window.addEventListener("scroll", () => {
+      topbar.classList.toggle("scrolled", window.scrollY > 8);
+    }, { passive: true });
+  }
+};
+
+/**
+ * A small rotating wireframe icosahedron in the dashboard hero, built with
+ * Three.js (loaded from CDN in index.html). Purely decorative — if
+ * Three.js fails to load, is on a tiny screen, or the user prefers reduced
+ * motion, this quietly does nothing and the rest of the app is unaffected.
+ */
+const Hero3D = {
+  renderer: null, scene: null, camera: null, mesh: null, core: null,
+  raf: null, started: false,
+  pointer: { x: 0, y: 0 },
+
+  init() {
+    const container = document.getElementById("hero3d");
+    const canvas = document.getElementById("hero3dCanvas");
+    if (!container || !canvas || typeof THREE === "undefined") return;
+    if (window.matchMedia("(max-width: 480px)").matches) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const size = container.clientWidth || 220;
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    this.camera.position.z = 4.2;
+
+    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setSize(size, size);
+
+    const geometry = new THREE.IcosahedronGeometry(1.4, 1);
+    const material = new THREE.MeshBasicMaterial({ color: 0xF5C518, wireframe: true, transparent: true, opacity: 0.85 });
+    this.mesh = new THREE.Mesh(geometry, material);
+    this.scene.add(this.mesh);
+
+    const coreGeometry = new THREE.IcosahedronGeometry(0.55, 0);
+    const coreMaterial = new THREE.MeshBasicMaterial({ color: 0xF5C518, transparent: true, opacity: 0.16 });
+    this.core = new THREE.Mesh(coreGeometry, coreMaterial);
+    this.scene.add(this.core);
+
+    container.addEventListener("mousemove", (e) => {
+      const rect = container.getBoundingClientRect();
+      this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      this.pointer.y = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    });
+    container.addEventListener("mouseleave", () => { this.pointer.x = 0; this.pointer.y = 0; });
+
+    window.addEventListener("resize", () => this.handleResize(container), { passive: true });
+    document.addEventListener("visibilitychange", () => { document.hidden ? this.stop() : this.start(); });
+
+    this.start();
+  },
+
+  handleResize(container) {
+    if (!this.renderer) return;
+    const size = container.clientWidth || 220;
+    this.renderer.setSize(size, size);
+  },
+
+  start() {
+    if (this.raf || !this.renderer) return;
+    const animate = () => {
+      if (this.mesh) { this.mesh.rotation.x += 0.0035; this.mesh.rotation.y += 0.005; }
+      if (this.core) { this.core.rotation.y -= 0.004; this.core.rotation.x += 0.002; }
+      if (this.camera) {
+        this.camera.position.x += (this.pointer.x * 0.6 - this.camera.position.x) * 0.05;
+        this.camera.position.y += (-this.pointer.y * 0.6 - this.camera.position.y) * 0.05;
+        this.camera.lookAt(0, 0, 0);
+      }
+      this.renderer.render(this.scene, this.camera);
+      this.raf = requestAnimationFrame(animate);
+    };
+    this.raf = requestAnimationFrame(animate);
+  },
+
+  stop() {
+    if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
+  }
+};
+
 /* =========================== 5. ROUTER =========================== */
 const VIEWS = ["dashboard", "transactions", "budgets", "goals", "analytics"];
 
@@ -264,13 +470,17 @@ window.addEventListener("hashchange", () => {
 /* =========================== 6. DASHBOARD =========================== */
 function renderDashboard() {
   const t = totals();
-  document.getElementById("statBalance").textContent = formatMoney(t.balance);
-  document.getElementById("statIncome").textContent = formatMoney(t.income);
-  document.getElementById("statExpenses").textContent = formatMoney(t.expense);
+  Effects.animateNumber(document.getElementById("statBalance"), t.balance);
+  Effects.animateNumber(document.getElementById("statIncome"), t.income);
+  Effects.animateNumber(document.getElementById("statExpenses"), t.expense);
 
   const monthSpent = sumBy(monthlyExpenses());
   const budgetLeft = state.budgets.overall != null ? state.budgets.overall - monthSpent : null;
-  document.getElementById("statBudgetLeft").textContent = budgetLeft != null ? formatMoney(budgetLeft) : "No budget set";
+  if (budgetLeft != null) {
+    Effects.animateNumber(document.getElementById("statBudgetLeft"), budgetLeft);
+  } else {
+    document.getElementById("statBudgetLeft").textContent = "No budget set";
+  }
 
   renderStreakBar();
   renderTransactionList(document.getElementById("recentTransactionsList"), state.transactions.slice().sort(sortByDateDesc).slice(0, 6), true);
@@ -344,11 +554,12 @@ function renderInsights() {
     insights.push("Keep logging transactions — insights will appear here once there's enough data.");
   }
 
-  el.innerHTML = insights.slice(0, 4).map(text => `
-    <div class="insight-card">
+  el.innerHTML = insights.slice(0, 4).map((text, i) => `
+    <div class="insight-card tiltable reveal" style="animation-delay:${i * 70}ms">
       <div class="insight-icon">💡</div>
       <p class="insight-text">${escapeHtml(text)}</p>
     </div>`).join("");
+  Effects.initTilt(el);
 }
 
 function renderDashBudgetSummary() {
@@ -368,9 +579,10 @@ function renderDashBudgetSummary() {
   const s = budgetState((spent / state.budgets.overall) * 100 || 0);
   el.innerHTML = `
     <div class="budget-figure"><div class="figure-label">Spent this month</div><div class="figure-value">${formatMoney(spent)}</div></div>
-    <div class="progress-track"><div class="progress-fill state-${s}" style="width:${pct}%"></div></div>
+    <div class="progress-track"><div class="progress-fill state-${s}" data-pct="${pct}"></div></div>
     <div class="budget-status-text"><span class="status-dot state-${s}"></span> ${budgetStateLabel(s)} · ${pct}% of ${formatMoney(state.budgets.overall)}</div>
   `;
+  Effects.animateFills(el);
 }
 
 function renderWeeklyReport() {
@@ -415,10 +627,11 @@ function renderDashTopGoal() {
   el.innerHTML = `
     <div class="goal-card-title" style="margin-bottom:6px;">${escapeHtml(goal.name)}</div>
     <div class="goal-progress-pct">${pct}% saved</div>
-    <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+    <div class="progress-track"><div class="progress-fill" data-pct="${pct}"></div></div>
     <div class="goal-figures"><span>Saved</span><span class="value">${formatMoney(goal.current)}</span></div>
     <div class="goal-figures"><span>Target</span><span class="value">${formatMoney(goal.target)}</span></div>
   `;
+  Effects.animateFills(el);
 }
 
 /* =========================== 7. TRANSACTIONS =========================== */
@@ -523,9 +736,10 @@ function renderOverallBudgetPanel() {
         <div class="budget-figure"><div class="figure-label">Remaining</div><div class="figure-value" style="color:${remaining < 0 ? "var(--color-danger)" : "var(--color-text)"}">${formatMoney(remaining)}</div></div>
       </div>
     </div>
-    <div class="progress-track"><div class="progress-fill state-${s}" style="width:${pct}%"></div></div>
+    <div class="progress-track"><div class="progress-fill state-${s}" data-pct="${pct}"></div></div>
     <div class="budget-status-text"><span class="status-dot state-${s}"></span> ${budgetStateLabel(s)} · ${pct}% used</div>
   `;
+  Effects.animateFills(el);
 }
 
 function renderCategoryBudgetsGrid() {
@@ -540,19 +754,19 @@ function renderCategoryBudgetsGrid() {
     return;
   }
   const byCat = spentByCategory();
-  el.innerHTML = cats.map(cat => {
+  el.innerHTML = cats.map((cat, i) => {
     const budget = state.budgets.categories[cat];
     const spent = byCat[cat] || 0;
     const remaining = budget - spent;
     const pct = Math.min(100, Math.round((spent / budget) * 100) || 0);
     const s = budgetState((spent / budget) * 100 || 0);
     return `
-      <div class="budget-card" data-category="${escapeHtml(cat)}">
+      <div class="budget-card tiltable reveal" style="animation-delay:${i * 60}ms" data-category="${escapeHtml(cat)}">
         <div class="budget-card-head">
           <span class="budget-card-icon">${categoryIcon(cat, "expense")}</span>
           <span class="budget-card-title">${escapeHtml(cat)}</span>
         </div>
-        <div class="progress-track"><div class="progress-fill state-${s}" style="width:${pct}%"></div></div>
+        <div class="progress-track"><div class="progress-fill state-${s}" data-pct="${pct}"></div></div>
         <div class="budget-status-text"><span class="status-dot state-${s}"></span> ${budgetStateLabel(s)} · ${pct}%</div>
         <div class="budget-card-figures">
           <span>Spent <strong>${formatMoney(spent)}</strong></span>
@@ -563,6 +777,8 @@ function renderCategoryBudgetsGrid() {
   el.querySelectorAll(".budget-card").forEach(card => {
     card.addEventListener("click", () => openCategoryBudgetModal(card.dataset.category));
   });
+  Effects.initTilt(el);
+  Effects.animateFills(el);
 }
 
 function renderRecurringList() {
@@ -604,11 +820,11 @@ function renderGoalsView() {
     el.querySelector("[data-action='open-goal']").addEventListener("click", () => openGoalModal());
     return;
   }
-  el.innerHTML = state.goals.map(g => {
+  el.innerHTML = state.goals.map((g, i) => {
     const pct = Math.min(100, Math.round((g.current / g.target) * 100));
     const remaining = Math.max(0, g.target - g.current);
     return `
-      <div class="goal-card" data-goal-id="${g.id}">
+      <div class="goal-card tiltable reveal" style="animation-delay:${i * 70}ms" data-goal-id="${g.id}">
         <div class="goal-card-head">
           <div>
             <div class="goal-card-title">${escapeHtml(g.name)}</div>
@@ -617,7 +833,7 @@ function renderGoalsView() {
           <button type="button" class="goal-card-menu-btn" data-edit-goal="${g.id}" aria-label="Edit goal">✎</button>
         </div>
         <div class="goal-progress-pct">${pct}% saved${pct >= 100 ? " 🎉" : ""}</div>
-        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div class="progress-track"><div class="progress-fill" data-pct="${pct}"></div></div>
         <div class="goal-figures"><span>Saved</span><span class="value">${formatMoney(g.current)}</span></div>
         <div class="goal-figures"><span>Target</span><span class="value">${formatMoney(g.target)}</span></div>
         <div class="goal-figures"><span>Remaining</span><span class="value">${formatMoney(remaining)}</span></div>
@@ -630,13 +846,15 @@ function renderGoalsView() {
 
   el.querySelectorAll("[data-add-money]").forEach(btn => btn.addEventListener("click", () => openGoalAddModal(btn.dataset.addMoney)));
   el.querySelectorAll("[data-edit-goal]").forEach(btn => btn.addEventListener("click", () => openGoalModal(btn.dataset.editGoal)));
+  Effects.initTilt(el);
+  Effects.animateFills(el);
 }
 
 /* =========================== 10. ANALYTICS + CHARTS =========================== */
 function renderAnalyticsView() {
   const expenses = state.transactions.filter(t => t.type === "expense");
   const biggest = expenses.slice().sort((a, b) => b.amount - a.amount)[0];
-  document.getElementById("statBiggestExpense").textContent = biggest ? formatMoney(biggest.amount) : formatMoney(0);
+  Effects.animateNumber(document.getElementById("statBiggestExpense"), biggest ? biggest.amount : 0);
 
   const byCat = {};
   expenses.forEach(t => byCat[t.category] = (byCat[t.category] || 0) + t.amount);
@@ -645,8 +863,8 @@ function renderAnalyticsView() {
 
   const daysTracked = new Set(state.transactions.map(t => t.date)).size || 1;
   const totalExpense = sumBy(expenses);
-  document.getElementById("statAvgDaily").textContent = formatMoney(totalExpense / daysTracked);
-  document.getElementById("statTxCount").textContent = state.transactions.length;
+  Effects.animateNumber(document.getElementById("statAvgDaily"), totalExpense / daysTracked);
+  Effects.animateNumber(document.getElementById("statTxCount"), state.transactions.length, { isCount: true });
 
   renderCategoryChart(byCat);
   renderIncomeExpenseChart();
@@ -1107,11 +1325,16 @@ document.getElementById("goalAddForm").addEventListener("submit", (e) => {
     return;
   }
   const g = state.goals.find(x => x.id === id);
+  const wasComplete = g.current >= g.target;
   g.current += val;
   persist("goals");
   closeModal("goalAddModalOverlay");
   renderCurrentView();
   Toast.show(`${formatMoney(val)} added to ${g.name}.`);
+  if (!wasComplete && g.current >= g.target) {
+    Toast.show(`🎉 Goal reached — ${g.name} is fully funded!`);
+    Effects.confetti();
+  }
 });
 
 /* ---- Recurring modals ---- */
@@ -1427,6 +1650,10 @@ function init() {
   wireAddButtons();
   wireFilters();
   wireAnalyticsToggle();
+
+  Effects.initTopbarScroll();
+  Effects.initTilt(document.querySelector(".cta-cards"));
+  try { Hero3D.init(); } catch (err) { console.warn("Spendly: 3D hero failed to start (purely decorative, app is unaffected).", err); }
 
   try { processRecurring(); } catch (err) { console.error("Spendly: recurring engine failed", err); }
 

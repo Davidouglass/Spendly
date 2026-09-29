@@ -8,6 +8,18 @@ Visually, Spendly borrows its dark, yellow-accented design language (rounded sta
 
 ---
 
+## Design & motion layer
+
+On top of the FutureTech-inspired dark/yellow visual language, the UI has a layer of interaction and motion:
+
+- **Ambient background** — three slow-drifting blurred color blobs (`.bg-aurora`) fixed behind everything.
+- **Glassmorphism** — panels, cards, the top bar, modals and toasts use translucent, blurred (`backdrop-filter`) surfaces so the aurora shows through. All glass colors are CSS variables (`--glass-bg`, `--glass-border`, etc.) in `style.css`, so re-skinning is a one-line change.
+- **3D hero** — a small rotating wireframe icosahedron built with [Three.js](https://threejs.org/) (`Hero3D` in `script.js`), loaded from a CDN, with subtle mouse-parallax. It's decorative only: if Three.js fails to load, the screen is small, or the visitor prefers reduced motion, it quietly does nothing and the rest of the app is unaffected.
+- **Micro-interactions** — mouse-reactive 3D tilt on cards (`Effects.initTilt`), animated count-up numbers on every stat (`Effects.animateNumber`), progress bars that animate in with a shimmer sweep, a confetti burst when a savings goal is fully funded, staggered entrance animations per view, and a button shine-on-hover.
+- Every animation respects `prefers-reduced-motion` and degrades gracefully — nothing here is required for the app to function.
+
+The `Effects` and `Hero3D` objects near the top of `script.js` (section "4b. EFFECTS") are self-contained — delete their init calls in `init()` if you ever want a plainer, faster build.
+
 ## Features
 
 - **Dashboard** — balance, income, expenses, budget remaining, recent transactions, auto-generated spending insights, a weekly report and your top savings goal, all in one glance.

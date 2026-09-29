@@ -15,6 +15,14 @@
 </head>
 <body>
 
+<!-- ============ AMBIENT BACKGROUND ============ -->
+<div class="bg-aurora" aria-hidden="true">
+  <span class="blob blob-1"></span>
+  <span class="blob blob-2"></span>
+  <span class="blob blob-3"></span>
+  <span class="bg-grain"></span>
+</div>
+
 <!-- ============ ANNOUNCEMENT BAR ============ -->
 <div class="announce-bar">
   <span>Your data never leaves this browser — private by default</span>
@@ -75,12 +83,17 @@
     <div class="container">
 
       <div class="hero">
-        <p class="eyebrow">Welcome back</p>
-        <h1 class="hero-title">Here's where your<br>money stands</h1>
-        <p class="hero-sub">Track spending, stay inside budget, and work toward the things you're saving for — all in one simple place.</p>
+        <div class="hero-text">
+          <p class="eyebrow reveal">Welcome back</p>
+          <h1 class="hero-title reveal" style="animation-delay:60ms">Here's where your<br>money stands</h1>
+          <p class="hero-sub reveal" style="animation-delay:120ms">Track spending, stay inside budget, and work toward the things you're saving for — all in one simple place.</p>
+        </div>
+        <div class="hero-3d reveal" id="hero3d" style="animation-delay:160ms" aria-hidden="true">
+          <canvas id="hero3dCanvas"></canvas>
+        </div>
       </div>
 
-      <div class="stats-row" id="statsRow">
+      <div class="stats-row reveal" id="statsRow" style="animation-delay:200ms">
         <div class="stat-cell">
           <div class="stat-value" id="statBalance">₦0</div>
           <div class="stat-label">Current Balance</div>
@@ -353,17 +366,17 @@
     </div>
   </div>
   <div class="container cta-cards">
-    <button type="button" class="cta-card" data-quick="add-expense">
+    <button type="button" class="cta-card tiltable reveal" data-quick="add-expense">
       <span class="cta-card-icon">↗</span>
       <span class="cta-card-title">Log an Expense</span>
       <span class="cta-card-desc">Takes about ten seconds. Amount, category, done.</span>
     </button>
-    <button type="button" class="cta-card" data-quick="set-budget">
+    <button type="button" class="cta-card tiltable reveal" data-quick="set-budget" style="animation-delay:80ms">
       <span class="cta-card-icon">↗</span>
       <span class="cta-card-title">Set a Budget</span>
       <span class="cta-card-desc">Give this month a limit so you always know where you stand.</span>
     </button>
-    <button type="button" class="cta-card" data-quick="add-goal">
+    <button type="button" class="cta-card tiltable reveal" data-quick="add-goal" style="animation-delay:160ms">
       <span class="cta-card-icon">↗</span>
       <span class="cta-card-title">Start a Goal</span>
       <span class="cta-card-desc">Laptop, trip, emergency fund — give it a name and a number.</span>
@@ -706,6 +719,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
